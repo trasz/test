@@ -1,4 +1,4 @@
-## Status Report Sample - This Will Become The Title ######
+## Status Report Sample - This Will Become The Title ##
 
 Contact: John Smith, <test@FreeBSD.org>
 
