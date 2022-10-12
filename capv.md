@@ -10,7 +10,7 @@ else.  One example is `comsg`, which uses the same `coexecve`/`cocall` mechanism
 but then makes design decisions very different from the `cocalls` branch.
 
 Also note that this tutorial is about _using_ colocation, not about how it's implemented
-underneath.
+under the hood.
 
 
 Setup
@@ -28,18 +28,18 @@ coexecve
 This is the first of three layers.  It's about the ability to run multiple processes
 in the same address space.  The reason for doing it is that memory capabilities can't
 work between address spaces.  Thus, to use capabilities as a mechanism for processes
-to communicate and share data, we need to put those processes in the same address space.
+to communicate and share data, we need to put those processes in the same one.
 Because of CHERI we can allow this without compromising security - the protection
 and isolation can be enforced by capabilities alone, without the need for MMU switching.
 The only (expected) new way for colocated processes to be able to interfere with one
-another, compared to a non-capability system, is by exhausing the virtual address space.
-Traditional resource limits still work.
+another, compared to a traditional, non-capability system, is by exhausing the virtual
+address space.  Traditional resource limits still work.
 
 The only convenient moment to decide "where to put" a process is when executing a binary;
 this typically means the execve(2) system call.  There are two ways to colocate:
 one is by invoking coexecve(2) system call, which is similar to execve(2), but takes
 an additional argument to indicate the PID of an existing process to colocate with.
-The other is just ordinary execve(2) sysccall with `kern.opportunistic_coexecve` sysctl
+The other is just ordinary execve(2) syscall with `kern.opportunistic_coexecve` sysctl
 set to 1 - this makes the kernel try to colocate processes whenever possible; by default
 it tries to colocate them with their parent processes.
 
@@ -140,7 +140,8 @@ Note that switcher bugs often manifest in ways that make one question their own 
 Most utilities provide the '-k' option to use kernel-based fallbacks instead.
 
 Before using coaccept(2) or cocall(2) for the first time in a thread, call cosetup(2).  If
-you are both the calling and the callee, call it twice.  The (to be) callee thread obtains
+you are both the caller (of some services) and the callee (for another), call it twice.
+The (to be) callee thread obtains
 the target capability using coregister(2), then passes it to prospective callers either via
 the capability vector, or over unix domain socket using `SCM_CAPS`.
 See usr.bin/coregister/coregister.c for a code example.  There is also the colookup(2)
@@ -152,7 +153,7 @@ using cogetpid(2).  Being a system call, cogetpid(2) is an order of magnitude sl
 the cocall itself, thus the need for caching.
 Or use cocachedpid(3) instead, which handles it for you.
 
-The buffers used with coaccept(2) and cocall(2) must be capability-aligned, and so must their sizes.
+Buffers to be used with coaccept(2) and cocall(2) must be capability-aligned, and so must their sizes.
 If the services might end up in the capability vector, please follow the conventions in <sys/capv.h>;
 apart from that the buffer contents are entirely application-defined, from raw binary ioctl structs
 to JSON.  You might want to use nv(9).
@@ -164,9 +165,9 @@ If you need async, have the service side queue up the transaction in whatever wa
 wake up the worker thread, then return.
 
 Thread-wise, this interface is N:1.  When the target is busy - ie not currently waiting in
-coaccept(2) - another cocall(2) to that target will spin until it's free.  If that happens,
+coaccept(2) - another cocall(2) to that target will spin until it's free.  When that happens,
 it usually means you should have multiple threads waiting on coaccept(2), and send their target
-capabilities to the callers to cocall them directly.  Targets are cheap.  Different applications
+capabilities to callers to cocall them directly.  Targets are cheap.  Different applications
 might benefit from different strategies of spreading the workload, but there probably should
 be a higher-level wrapper API implementing the few typical ones XXX.
 
