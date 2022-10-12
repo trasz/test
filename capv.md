@@ -105,7 +105,7 @@ the child is no longer colocated with the parent, but after execve(2) it probabl
 There are several ways of sharing capabilities between processes: they can be sent
 via the buffers provided to cocall(2), or via capv(7), or using the obsolete colookup(2)
 system call, all of which are described below.  They can also be transferred over unix(4)
-domain sockets (see SCM\_CAPS) , similar to how file descriptors are.
+domain sockets (see `SCM_CAPS`) , similar to how file descriptors are.
 Kernel will prevent the transfer if the sending and receiving processes are in different
 address spaces.
 
@@ -186,7 +186,7 @@ vector, and will be able to access the services.  One can execute a program with
 capability vector by using the coexecvec(2) syscall.  Should it fail for no reason at all,
 you probably need to use vfork(2) instead of fork(2).
 
-To fetch the vector in a child process use elf_aux_info(3).  The capvset(3) function might
+To fetch the vector in a child process use `elf_aux_info(3)`.  The capvset(3) function might
 be of use too.
 
 Initially the vector is empty; login as `root`, and do:
@@ -194,7 +194,7 @@ Initially the vector is empty; login as `root`, and do:
 root@cheribsd-riscv64-purecap:~ # capv
 capv: no capability vector
 ```
-Now run the `clocks` service - which is a code example which implements clock_gettime(2)
+Now run the `clocks` service - which is a code example which implements `clock_gettime(2)`
 as a service call instead of the usual syscall - with shell as a child process:
 ```
 root@cheribsd-riscv64-purecap:~ # clocks sh
@@ -202,7 +202,7 @@ root@cheribsd-riscv64-purecap:~ #
 ```
 Seemingly nothing changed, but it's a different sh(1) instance, as shown by the process
 tree on the right:
-
+```
 root@cheribsd-riscv64-purecap:~ # ps axld
 UID PID PPID C PRI NI       VSZ   RSS MWCHAN   STAT TT     TIME COMMAND
   0   0    0 0 -16  0         0   224 swapin   DLs   -  0:00.14 [kernel]
@@ -218,20 +218,22 @@ UID PID PPID C PRI NI       VSZ   RSS MWCHAN   STAT TT     TIME COMMAND
   0 799  795 0  29  0   3273292 17048 copark   IC   u0  0:00.07     `-- clocks sh
   0 800  799 0  20  0   3273292 17048 wait     S    u0  0:00.18       `-- sh
   0 801  800 0  34  0   3273292 17048 -        R+   u0  0:00.09         `-- ps axld
+```
  
 You can see the login shell, PID 795, the `clocks` service, PID 799, and the shell it started, PID 800.  You
 can also see that WCHAN for `clocks` is "copark", which means it's waiting on coaccept(2).
 Now:
-
+```
 root@cheribsd-riscv64-purecap:~ # capv -c
 8:      0x13000 [rwRW,0x13000-0x14000] (sealed):	"clocks(1), pid 799, responding to clock_gettime()"
+```
 
 This shows the capability vector, which for now contains only one capability: the clocks service,
 at offset 8; the rest of the vector is NULLs.
 Services tend to use predefined, even offsets; clocks is 8.  The string to the right is what the service
 responded with - it returns a literal string in an "answerback" packet; you can snoop on the
 communication between `capv` and `clocks`:
-
+```
 root@cheribsd-riscv64-purecap:~ # cotrace -v capv
 cotrace: cocall from pid 810[8] -> pid 809, received 16, len 16, op 12: "\020\0\0\0\0\0\0\0\f\0\0\0\0\0\0\0"
 cotrace: returning to pid 810[8] <- pid 809, len 48, op -8: "0\0\0\0\0\0\0\0\370\377\377\377\0\0\0\0\0\0\0\0\0\0\0\0~\001\0\0\0\0\0\0\207\252\2178\0\0\0\0\0\0\0\0\0\0\0\0"
@@ -243,6 +245,7 @@ cotrace: cocall from pid 810[8] -> pid 809, received 16, len 16, op 0: "\020\0\0
 cotrace: returning to pid 810[8] <- pid 809, len 1040, op 0: "\020\004\0\0\0\0\0\0\0\0\0\0clocks(1), pid 799, responding to clock_gettime()\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 cotrace: returning answerback to pid[810] 8 <- pid 809
 8:      "clocks(1), pid 799, responding to clock_gettime() -- via cotrace(1..."
+```
 
 Each line is either a cocall or a return from a cocall.  Those '\0' are zeroes; it's the binary dump of output
 buffers passed to cocall(3) and coaccept(2).
@@ -254,21 +257,22 @@ Note that `cotrace` is itself a special kind of service.
 Also observe how in this example the answerback was actually different - it's because cotrace(1), being an interposer,
 added its own piece of text there.  The convention here is that services can be chained, similar to how
 the traditional nice(1) command is used.  Thus, the example above could instead be run as:
-
+```
 # clocks cotrace capv
+```
 
 The capability vector is inherited by default, as long as the child process is colocated with the parent,
 which it usually is because of opportunistic colocation.
 But sometimes this parent-descendants model is not enough.  That's when coregister(1) and colookup(1)
 utilities can be used.  The former "pushes" a capability over unix domain
 socket (a "file system" socket); the latter receives it.  Thus:
-
+```
 # clocks -v coregister -i8 -f socket-path &
 # colookup -f socket-path -i8 capv
+```
 
 Observe how capv(1) calls into service 8, clocks(1), even though it's not its descendant.  This can be used
 to run a service as a different user.
-
 
 Benchmarks
 ==========
@@ -276,7 +280,7 @@ Benchmarks
 If you wanted to perform a quick comparison between normal and slow cocalls: start a shell with two
 services, ping them, exit that shell, start it again but this time with one of them
 in slow mode (`-k`), and ping again; observe the reported speed difference:
-
+```
 root@cheribsd-riscv64-purecap:~ # clocks binds sh
 root@cheribsd-riscv64-purecap:~ # capv
 8:      "clocks(1), pid 819, responding to clock_gettime()"
@@ -292,7 +296,7 @@ root@cheribsd-riscv64-purecap:~ # capv
 root@cheribsd-riscv64-purecap:~ # coping -ac 1000
 coping: capv[8]: 50.656ms for 1000 iterations, 50.655us each
 coping: capv[10]: 270.122ms for 1000 iterations, 270.122us each
-
+```
 There's also cocall support in syscall_timing(1).
 
 
