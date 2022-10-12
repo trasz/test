@@ -1,7 +1,8 @@
 Colocation tutorial
 ===================
 
-PROTIP: "man 7 capv" is shorter
+PROTIP: "man 7 capv" is shorter.  Many/most things, like colookup(1), have man pages,
+so look at `man 1 colookup` on the nearest Morello box.
 
 The whole topic below is conceptually split into three "layers", each building upon
 the previous one.  This is to make it easy to substitute the higher layers with something
