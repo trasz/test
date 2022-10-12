@@ -109,8 +109,6 @@ domain sockets (see SCM\_CAPS) , similar to how file descriptors are.
 Kernel will prevent the transfer if the sending and receiving processes are in different
 address spaces.
 
-XXX capfromfd, captofd
-
 cocall
 ======
 
@@ -170,6 +168,10 @@ it usually means you should have multiple threads waiting on coaccept(2), and se
 capabilities to the callers to cocall them directly.  Targets are cheap.  Different applications
 might benefit from different strategies of spreading the workload, but there probably should
 be a higher-level wrapper API implementing the few typical ones XXX.
+
+Everything in UNIX revolves around file descriptors, and so there is a mechanism to "translate"
+file descriptors into sealed capabilities and vice versa; grep the source for capfromfd(2)
+and captofd(2) system calls.  This can be used to pass a file descriptor to a cocalled service.
 
 
 capv
