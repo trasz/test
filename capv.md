@@ -306,5 +306,5 @@ Repo organisation
 
 There are three branches: `coexecve`, `cocall`, and `cocalls`.  Branching goes like this: `dev` -> `coexecve` -> `cocall` -> `cocalls`.
 
-Use `git diff cocalls..cocall` or `git diff cocall..coexecve` for the diff between branches.
+Use `git diff coexecve..cocall` or `git diff cocall..cocalls` for the diff between branches.
 
