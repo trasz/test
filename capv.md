@@ -130,10 +130,10 @@ until invoked by another cocall(2).  It then returns with input buffer overwritt
 output buffer.  Note how each invocation of coaccept(2) copies the output to the _previous_
 caller, and later, after sleep, returns with input data from the _next_ caller.
 
-Both cocall(2) and coaccept(2) calls have their `cocall_slow(2)` and `coaccept_slow(2)` counterparts.
+Both cocall(2) and coaccept(2) calls have their cocall\_slow(2) and coaccept\_slow(2) counterparts.
 Their semantics is (supposed to be) exactly the same; the difference is that the slow ones are
 implemented as ordinary system calls, they don't use the switcher.  If something works with
-`cocall_slow(2)`, but doesn't with plain `cocall(2)`, it usually means a switcher bug.
+cocall\_slow(2), but doesn't with plain cocall(2), it usually means a switcher bug.
 
 Note that switcher bugs often manifest in ways that make one question their own sanity.  This is normal.
 Most utilities provide the '-k' option to use kernel-based fallbacks instead.
@@ -186,15 +186,15 @@ vector, and will be able to access the services.  One can execute a program with
 capability vector by using the coexecvec(2) syscall.  Should it fail for no reason at all,
 you probably need to use vfork(2) instead of fork(2).
 
-To fetch the vector in a child process use `elf_aux_info(3)`.  The capvset(3) function might
+To fetch the vector in a child process use elf_aux_info(3).  The capvset(3) function might
 be of use too.
 
-Initially the vector is empty; login as `root`, and do:
+Initially the vector is empty; login as root, and do:
 ```
 root@cheribsd-riscv64-purecap:~ # capv
 capv: no capability vector
 ```
-Now run the `clocks` service - which is a code example which implements `clock_gettime(2)`
+Now run the `clocks` service - which is a code example which implements clock\_gettime(2)
 as a service call instead of the usual syscall - with shell as a child process:
 ```
 root@cheribsd-riscv64-purecap:~ # clocks sh
@@ -249,7 +249,7 @@ cotrace: returning answerback to pid[810] 8 <- pid 809
 
 Each line is either a cocall or a return from a cocall.  Those '\0' are zeroes; it's the binary dump of output
 buffers passed to cocall(3) and coaccept(2).
-The first couple of cocalls you see is jemalloc(3) calling clock_gettimeofday(2) for... whatever reason.
+The first couple of cocalls you see is jemalloc(3) calling clock\_gettimeofday(2) for... whatever reason.
 The buffers returned are 'struct timespec' contents.
 The last cocall returns the answerback, which contains an embedded string that capv(1) then displays.
 
@@ -297,7 +297,7 @@ root@cheribsd-riscv64-purecap:~ # coping -ac 1000
 coping: capv[8]: 50.656ms for 1000 iterations, 50.655us each
 coping: capv[10]: 270.122ms for 1000 iterations, 270.122us each
 ```
-There's also cocall support in syscall_timing(1).
+There's also cocall support in syscall\_timing(1).
 
 
 Repo organisation
@@ -305,5 +305,5 @@ Repo organisation
 
 There are three branches: `coexecve`, `cocall`, and `cocalls`.  Branching goes like this: `dev` -> `coexecve` -> `cocall` -> `cocalls`.
 
-Use 'git diff cocalls..cocall' or 'git diff cocall..coexecve' for the diff between branches.
+Use `git diff cocalls..cocall` or `git diff cocall..coexecve` for the diff between branches.
 
