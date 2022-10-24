@@ -1,13 +1,13 @@
 Colocation tutorial
 ===================
 
-PROTIP: "man 7 capv" is shorter.  Many/most things, like colookup(1), have man pages,
-so look at `man 1 colookup` on the nearest Morello box.
+PROTIP: Take a look at "man 7 capv" on the nearest Morello box.  Many/most things
+described here have man pages, so one can do eg `man colookup`.
 
 The whole topic below is conceptually split into three "layers", each building upon
 the previous one.  This is to make it easy to substitute the higher layers with something
 else.  One example is `comsg`, which uses the same `coexecve`/`cocall` mechanisms,
-but then makes design decisions very different from the `cocalls` branch.
+but then makes design decisions very different from what's happening in the `cocalls` branch.
 
 Also note that this tutorial is about _using_ colocation, not about how it's implemented
 under the hood.
@@ -25,23 +25,34 @@ You probably want to use riscv64-purecap, as the Morello version of the switcher
 coexecve
 ========
 
-This is the first of three layers.  It's about the ability to run multiple processes
-in the same address space.  The reason for doing it is that memory capabilities can't
-work between address spaces.  Thus, to use capabilities as a mechanism for processes
-to communicate and share data, we need to put those processes in the same one.
+This is the first of three layers.  It's about the ability to have multiple processes
+running in the same address space.  The reason for doing it is that memory capabilities
+can't work between address spaces.  Thus, to use capabilities as a mechanism for processes
+to communicate and share data, we need to put those processes in the same space.
 Because of CHERI we can allow this without compromising security - the protection
 and isolation can be enforced by capabilities alone, without the need for MMU switching.
 The only (expected) new way for colocated processes to be able to interfere with one
-another, compared to a traditional, non-capability system, is by exhausing the virtual
+another, compared to a traditional, non-capability Unix system, is by exhausting the virtual
 address space.  Traditional resource limits still work.
 
-The only convenient moment to decide "where to put" a process is when executing a binary;
-this typically means the execve(2) system call.  There are two ways to colocate:
-one is by invoking coexecve(2) system call, which is similar to execve(2), but takes
-an additional argument to indicate the PID of an existing process to colocate with.
-The other is just ordinary execve(2) syscall with `kern.opportunistic_coexecve` sysctl
-set to 1 - this makes the kernel try to colocate processes whenever possible; by default
-it tries to colocate them with their parent processes.
+The convenient moment to decide "where to put" a process is when executing the binary;
+this typically means the execve(2) system call.  There are two ways to colocate.
+The first one is by invoking coexecve(2) system call, which is similar to execve(2),
+but takes an additional argument to indicate the PID of an existing process to colocate with.
+This is useful for software that makes explicit use of colocation, like the colocated
+Apache SSL sandbox (https://github.com/CTSRD-CHERI/sslproc; see `apache-sslproc` `cheribuild` target).
+There is also the coexec(1) command, to explicitly run a binary colocated with another
+process, which can serve as a trivial code example; see `usr.bin/coexec/coexec.c`.
+
+The other way is the ordinary execve(2) syscall (or posix\_spawn(2), ie any kind of running a binary)
+with `kern.opportunistic_coexecve` sysctl set to 1 - this makes the kernel try to colocate
+processes whenever possible.  By default it tries to colocate them with their parents,
+falling back to the traditional behaviour of allocating new address spaces.
+This is useful for enabling communication between independent programs, eg within
+a shell session.
+
+Both mechanisms can be used at the same time - processes that are not explicitly
+colocated using coexecve(2) will still get colocated opportunistically.
 
 From the user point of view, when you login to CheriBSD as root, you can do:
 ```
@@ -72,8 +83,11 @@ root  682  0.0  0.1  23311896  1740  -  Ss   23:21      0:06.86 /usr/sbin/syslog
 root  781  0.0  0.1  19102964  2296  -  Is   23:21      0:00.07 sshd: /usr/sbin/ ffffffd0014efc40
 root  840  0.0  0.5   1123268 10956 u0  R+   16:45      0:00.14 ps aux -o vmaddr ffffffd0014ed380
 ```
-The rightmost column, VMADDR, identifies the address space.  Here you can see PIDs 838, 837,
-and 840 sharing the same one - they are colocated.  You can view the address space layout like this:
+The rightmost column, VMADDR, identifies the address space.  Here you can see processes identified
+by PIDs 838, 837, and 840 are sharing the same space - they are colocated.  In this case those
+processes don't know anything about colocation; they got colocated opportunistically.
+
+You can view the address space layout like this:
 ```
 root@cheribsd-riscv64-purecap:~ # procstat -v 837
   PID              START                END PRT    RES PRES REF SHD FLAG  TP PATH
@@ -92,34 +106,85 @@ root@cheribsd-riscv64-purecap:~ # procstat -v 837
   842           0x18b000           0x193000 r-xR-    8   32   4   2 CN--- vn /usr/bin/procstat
   842           0x193000           0x196000 r--R-    3    0   1   0 C---- vn /usr/bin/procstat
   842           0x196000           0x199000 rw-RW    3    0   1   0 C---- vn /usr/bin/procstat
- 
+
 [lots of shared library mappings snipped]
 ```
-Observe the PID column - it indicates which process owns a mapping.  The kernel won't allow
-processes to interfere with mappings owned (ie created) by others.
+Observe the leftmost PID column - it indicates which process owns a memory mapping.
+The kernel won't allow processes to interfere with mappings owned (ie created) by others.
+Without colocation, all the mappings within an address space would belong to the same
+process.
 
-To manually force a binary to be colocated with another process use the coexec(1) command.
+Colocation was designed to follow the usual Unix conventions.  There are a few cases
+where this leads to non-intuitive outcomes - for example, after calling fork(2), the
+child ends up in its own address space - which means it's no longer colocated with its
+parent.  In most cases it will become colocated again after it executes a binary.
 
-XXX most things stay as they were, but some how non-trivial consequences, eg after fork,
-the child is no longer colocated with the parent, but after execve(2) it probably will.
+There are several ways of transferring capabilities between processes: they can be sent
+via the buffers provided to cocall(2), or passed to a child via capv(7), transferred
+over unix(4) domain sockets (see `SCM_CAPS`), or published using the obsolete colookup(2)
+system call; some of those methods are described further below.
+For security reasons the kernel will prevent the transfer if sending and receiving
+processes are in different address spaces.
 
-There are several ways of sharing capabilities between processes: they can be sent
-via the buffers provided to cocall(2), or via capv(7), or using the obsolete colookup(2)
-system call, all of which are described below.  They can also be transferred over unix(4)
-domain sockets (see `SCM_CAPS`) , similar to how file descriptors are.
-Kernel will prevent the transfer if the sending and receiving processes are in different
-address spaces.
+Sending memory capabilities over unix domain socket works similar in concept to
+sending file descriptors using `SCM_RIGHTS`; one important difference is that the
+capabilities can only be received by a process running in the same address space as
+the sending process.
+The sending side looks like this (`usr.bin/coregister/coregister.c`; `target`
+is the `void * __capability` being sent over unix(4) socket indicated by `clientfd`):
+```
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_control = &cmsgbuf.buf;
+	msg.msg_controllen = sizeof(cmsgbuf.buf);
+	msg.msg_iov = NULL;
+	msg.msg_iovlen = 0;
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_len = CMSG_LEN(sizeof(target));
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_CAPS;
+	memcpy(CMSG_DATA(cmsg), &target, sizeof(target));
+
+	sent = sendmsg(clientfd, &msg, MSG_NOSIGNAL);
+	if (sent < 0)
+		warn("sendmsg");
+```
+
+Corrensponding receiving side (`usr.bin/colookup/colookup.c`; `target` is being
+received from `fd`) is:
+```
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_control = &cmsgbuf.buf;
+	msg.msg_controllen = sizeof(cmsgbuf.buf);
+	msg.msg_iov = NULL;
+	msg.msg_iovlen = 0;
+
+	received = recvmsg(fd, &msg, MSG_WAITALL);
+	if (received != 0)
+		err(1, "%s: recvmsg", filename);
+	cmsg = CMSG_FIRSTHDR(&msg);
+	memcpy(&target, CMSG_DATA(cmsg), sizeof(target));
+```
 
 cocall
 ======
 
 This builds upon coexecve, as described above, to provide a fast RPC-like mechanism between colocated
-processes.  It uses CHERI magic in the form of `ccall` CPU instruction to switch protection
-domains without the need to enter the kernel.  From the user point of view it's all about
-two functions: cocall(2) for the caller (client) side, and coaccept(2) for the callee (service)
-side.
+processes.   It revolves around two functions: cocall(2) for the caller (client) side,
+and coaccept(2) for the callee (service) side.  Underneath they are implemented using CHERI magic
+in the form of `ccall` CPU instruction to switch protection domains without the need to enter the kernel,
+but from the API user point of view they mostly look like ordinary system calls and follow typical
+system call conventions, `errno` et al.
 
-The cocall(2) side is simple: it takes a target capability, which identifies the service
+This also applies to security - assume mutual distrust.  On every call, the called side receives
+the information on caller's identity, the contents of their output buffer, and length of that buffer.
+It can return to the caller once.  Upon return the caller receives the contents of the callee's output
+buffer, its size, and errno for the cocall(2) itself.  The buffer contents are copied; the raw
+capabilities to buffers are not passed to the other side.  The capabilities _within_ buffers are passed
+verbatim though.  Watch out what you send, or strip the 'load capability' permission from buffer capability
+before passing it to coaccept(2) or cocall(2).
+
+The cocall(2) function takes a target capability, which identifies the service
 to call, and two buffers; the content of the output buffer gets copied to the service side,
 then cocall(2) sleeps waiting for the service to finish, then the input buffer
 gets overwritten with data from the service, and the length of that data becomes cocall(2)'s
@@ -131,32 +196,118 @@ until invoked by another cocall(2).  It then returns with input buffer overwritt
 output buffer.  Note how each invocation of coaccept(2) copies the output to the _previous_
 caller, and later, after sleep, returns with input data from the _next_ caller.
 
-Both cocall(2) and coaccept(2) calls have their cocall\_slow(2) and coaccept\_slow(2) counterparts.
-Their semantics is (supposed to be) exactly the same; the difference is that the slow ones are
-implemented as ordinary system calls, they don't use the switcher.  If something works with
-cocall\_slow(2), but doesn't with plain cocall(2), it usually means a switcher bug.
+Here is a code example of two threads using this mechanism to communicate
+(`usr.bin/stevie/stevie.c` in CheriBSD `cocalls` branch):
+```
+#include <err.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
 
-Note that switcher bugs often manifest in ways that make one question their own sanity.  This is normal.
-Most utilities provide the '-k' option to use kernel-based fallbacks instead.
+static pthread_t		service_thread;
+static void * __capability	target;
 
-Before using coaccept(2) or cocall(2) for the first time in a thread, call cosetup(2).  If
-you are both the caller (of some services) and the callee (for another), call it twice.
-The (to be) callee thread obtains
-the target capability using coregister(2), then passes it to prospective callers either via
-the capability vector, or over unix domain socket using `SCM_CAPS`.
-See usr.bin/coregister/coregister.c for a code example.  There is also the colookup(2)
-syscall, which provides a simpler way, but please don't use it.
+static void *
+service_function(void *dummy __unused)
+{
+	/*
+	 * Can't use int here, because buffers need to be capability-aligned.
+	 * This will happen naturally when using malloc(3), but for now lets keep
+	 * it simple and use a capability-sized integer type instead.
+	 */
+	intcap_t buf = 0;
+	ssize_t received;
+	int error;
 
-On every return coaccept(2) fills in the `cookie`, which uniquely identifies the cocall(2)-ing
-thread.  This value is supposed to be cached.  Threads with unrecognized cookie values can be identified
-using cogetpid(2).  Being a system call, cogetpid(2) is an order of magnitude slower than
-the cocall itself, thus the need for caching.
-Or use cocachedpid(3) instead, which handles it for you.
+	/*
+	 * Every thread needs to do this once before calling coaccept(2).
+	 */
+	error = cosetup(COSETUP_COACCEPT);
+	if (error != 0)
+		err(1, "cosetup");
+
+	/*
+	 * Ask kernel for the target capability to call into this thread;
+	 * the `target` is a global variable, to be used by the calling thread.
+	 */
+	error = coregister(NULL, &target);
+	if (error != 0)
+		err(1, "coregister");
+
+	/*
+	 * Now loop until the process exits.
+	 */
+	for (;;) {
+		/*
+		 * Send back the response, if any, then wait for next caller.
+		 */
+		received = coaccept(NULL, &buf, sizeof(buf), &buf, sizeof(buf));
+		if (received < 0)
+			err(1, "cocall");
+
+		/*
+		 * Got a call, bump the counter and loop.
+		 */
+		printf("accepted, counter is %d\n", (int)buf);
+		buf++;
+	}
+}
+
+int
+main(int argc __unused, char **argv __unused)
+{
+	intcap_t buf = 0;
+	ssize_t received;
+	int error, i;
+
+	/*
+	 * Create the thread to wait on coaccept(2).
+	 */
+	error = pthread_create(&service_thread, NULL, service_function, NULL);
+	if (error != 0)
+		err(1, "pthread_create");
+
+	/*
+	 * Give the service thread a moment to start coaccepting before we proceed;
+	 * otherwise cocall(3) might fail with EAGAIN.
+	 */
+	usleep(1000);
+
+	/*
+	 * Every thread needs to do this once before calling cocall(2).
+	 * Call it twice if it needs both coaccept(2) and cocall(2).
+	 */
+	error = cosetup(COSETUP_COCALL);
+	if (error != 0)
+		err(1, "cosetup");
+
+	/*
+	 * Do the thing a couple of times.
+	 */
+	for (i = 3; i > 0; i--) {
+		printf("calling %lp...\n", target);
+		received = cocall(target, &buf, sizeof(buf), &buf, sizeof(buf));
+		if (received < 0)
+			err(1, "cocall");
+		printf("returned, counter is %d\n", (int)buf);
+	}
+
+	/*
+	 * Exit.
+	 */
+	return (0);
+}
+```
+
+Despite cocall(2) being advertised as an RPC mechanism, it does not say anything about
+opcodes or methods. Instead it's entirely application-defined, left for a higher layer,
+with cocall(2) only handling the data and execution transfers.
+The reasoning here is that consumers typically already have their own ideas about what to send
+and how to pack it - cocall buffers can thus carry DBus packets, or binary ioctl structs, or JSON.
+Otherwise nv(9) is a good option.
 
 Buffers to be used with coaccept(2) and cocall(2) must be capability-aligned, and so must their sizes.
-If the services might end up in the capability vector, please follow the conventions in <sys/capv.h>;
-apart from that the buffer contents are entirely application-defined, from raw binary ioctl structs
-to JSON.  You might want to use nv(9).
+If the services might end up in the capability vector, please follow the conventions in <sys/capv.h>.
 
 This interface is strictly synchronous - which kind of follows from being optimised for low latency.
 It also avoids the common problem of impedance mismatch between the kind of asynchronicity provided
@@ -169,7 +320,21 @@ coaccept(2) - another cocall(2) to that target will spin until it's free.  When 
 it usually means you should have multiple threads waiting on coaccept(2), and send their target
 capabilities to callers to cocall them directly.  Targets are cheap.  Different applications
 might benefit from different strategies of spreading the workload, but there probably should
-be a higher-level wrapper API implementing the few typical ones XXX.
+be a higher-level wrapper API implementing the few typical ones.
+
+On every return coaccept(2) fills in the `cookie` argument (if provided), which uniquely identifies the cocall(2)-ing
+thread.  This value is supposed to be cached.  Threads with unrecognized cookie values can be identified
+using cogetpid(2).  Being a system call, cogetpid(2) is an order of magnitude slower than
+the cocall itself, thus the need for caching.
+Or use cocachedpid(3) instead, which handles it for you.
+
+Both cocall(2) and coaccept(2) calls have their cocall\_slow(2) and coaccept\_slow(2) counterparts.
+Their semantics is (supposed to be) exactly the same; the difference is that the slow ones are
+implemented as ordinary system calls, they don't use the switcher.  If something works with
+cocall\_slow(2), but doesn't with plain cocall(2), it usually means a switcher bug.
+
+Note that switcher bugs often manifest in ways that make one question their own sanity.  This is normal.
+Most utilities provide the '-k' option to use kernel-based fallbacks instead.
 
 Everything in UNIX revolves around file descriptors, and so there is a mechanism to "translate"
 file descriptors into sealed capabilities and vice versa; grep the source for capfromfd(2)
@@ -180,24 +345,29 @@ capv
 ====
 
 The capability vector is an array of capabilities inherited by child processes from the parent
-process when colocated with it.  Typically it contains sealed target capabilities - the ones
-to pass to cocall(2).  By default the vector is inherited unchanged by the child process,
+process.  In that regard it is somewhat similar to traditional Unix open
+file descriptors, environment variables, or security credentials; the exact inheritance policy
+is a bit more involved, but as a general rule the vector will never get inherited in any case where
+file descriptors wouldn’t; this fact should simplify reasoning about its security properties.
+
+Typically the capability vector contains sealed target capabilities - the ones to pass to cocall(2).
+By default the vector is inherited unchanged by the child process,
 as long as it's colocated with that parent.  This means that if you run sh(1) with a given vector,
 every command you run, and every command run by a shell script you run, will inherit that
 vector, and will be able to access the services.  One can execute a program with a different
 capability vector by using the coexecvec(2) syscall.  Should it fail for no reason at all,
 you probably need to use vfork(2) instead of fork(2).
 
-To fetch the vector in a child process use elf_aux_info(3).  The capvset(3) function might
-be of use too.
+To fetch the vector in a child process use elf\_aux\_info(3), or the capvfetch(3) libc wrapper;
+see `usr.bin/capv/capv.c`.  The capvset(3) function might be of use too.
 
 Initially the vector is empty; login as root, and do:
 ```
 root@cheribsd-riscv64-purecap:~ # capv
 capv: no capability vector
 ```
-Now run the `clocks` service - which is a code example which implements clock\_gettime(2)
-as a service call instead of the usual syscall - with shell as a child process:
+Now run the `clocks` service - an example service (`usr.bin/clocks/clocks.c`) which implements clock\_gettime(2)
+as a cocall instead of the usual syscall - with shell as a child process:
 ```
 root@cheribsd-riscv64-purecap:~ # clocks sh
 root@cheribsd-riscv64-purecap:~ #
@@ -221,7 +391,7 @@ UID PID PPID C PRI NI       VSZ   RSS MWCHAN   STAT TT     TIME COMMAND
   0 800  799 0  20  0   3273292 17048 wait     S    u0  0:00.18       `-- sh
   0 801  800 0  34  0   3273292 17048 -        R+   u0  0:00.09         `-- ps axld
 ```
- 
+
 You can see the login shell, PID 795, the `clocks` service, PID 799, and the shell it started, PID 800.  You
 can also see that WCHAN for `clocks` is "copark", which means it's waiting on coaccept(2).
 Now:
@@ -276,12 +446,13 @@ socket (a "file system" socket); the latter receives it.  Thus:
 Observe how capv(1) calls into service 8, clocks(1), even though it's not its descendant.  This can be used
 to run a service as a different user.
 
+
 Benchmarks
 ==========
 
 If you wanted to perform a quick comparison between normal and slow cocalls: start a shell with two
 services, ping them, exit that shell, start it again but this time with one of them
-in slow mode (`-k`), and ping again; observe the reported speed difference:
+in slow mode ('-k'), and ping again; observe the reported speed difference:
 ```
 root@cheribsd-riscv64-purecap:~ # clocks binds sh
 root@cheribsd-riscv64-purecap:~ # capv
