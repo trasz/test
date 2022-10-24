@@ -304,7 +304,9 @@ opcodes or methods. Instead it's entirely application-defined, left for a higher
 with cocall(2) only handling the data and execution transfers.
 The reasoning here is that consumers typically already have their own ideas about what to send
 and how to pack it - cocall buffers can thus carry DBus packets, or binary ioctl structs, or JSON.
-Otherwise nv(9) is a good option.
+Otherwise nv(9) is a good option.  Note that this also applies to return values - do not try
+to overload the value returned by cocall(2); instead pack the application-level return status
+(including errno, sense data or whatever else) into coaccept's output buffer.
 
 Buffers to be used with coaccept(2) and cocall(2) must be capability-aligned, and so must their sizes.
 If the services might end up in the capability vector, please follow the conventions in <sys/capv.h>.
