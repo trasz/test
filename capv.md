@@ -170,7 +170,14 @@ cocall
 ======
 
 This builds upon coexecve, as described above, to provide a fast RPC-like mechanism between colocated
-processes.   It revolves around two functions: cocall(2) for the caller (client) side,
+processes.
+
+Processes are Unix' natural compartments, and lots of existing software makes use of that model.
+The problem is, they are heavy-weight; communication and context switching overhead make
+using them for fine-grained compartmentalisation impractical.  Cocalls, being fast (order of magnitude
+slower than a function call, order of magnitude faster than a cheapest syscall), aim to fix that problem.
+
+This functionality revolves around two functions: cocall(2) for the caller (client) side,
 and coaccept(2) for the callee (service) side.  Underneath they are implemented using CHERI magic
 in the form of `ccall` CPU instruction to switch protection domains without the need to enter the kernel,
 but from the API user point of view they mostly look like ordinary system calls and follow typical
@@ -181,8 +188,9 @@ the information on caller's identity, the contents of their output buffer, and l
 It can return to the caller once.  Upon return the caller receives the contents of the callee's output
 buffer, its size, and errno for the cocall(2) itself.  The buffer contents are copied; the raw
 capabilities to buffers are not passed to the other side.  The capabilities _within_ buffers are passed
-verbatim though.  Watch out what you send, or strip the 'load capability' permission from buffer capability
-before passing it to coaccept(2) or cocall(2).
+verbatim though, and can be dereferenced by the other side.  Watch out what you send, or strip
+the 'load capability' permission from the output buffer capability before passing it to coaccept(2)
+or cocall(2).
 
 The cocall(2) function takes a target capability, which identifies the service
 to call, and two buffers; the content of the output buffer gets copied to the service side,
@@ -340,7 +348,31 @@ Most utilities provide the '-k' option to use kernel-based fallbacks instead.
 
 Everything in UNIX revolves around file descriptors, and so there is a mechanism to "translate"
 file descriptors into sealed capabilities and vice versa; grep the source for capfromfd(2)
-and captofd(2) system calls.  This can be used to pass a file descriptor to a cocalled service.
+and captofd(2) system calls.  This can be used to pass a file descriptor to a cocalled service,
+similar how one can pass them over unix domain sockets.   This interface is a very much work
+in progress, but there is example code in `usr.bin/binds/binds.c` and it looks like this:
+```
+	received = coaccept(&cookie, out, out->len, &in, sizeof(in));
+	if (received < 0) {
+		warn("%s", kflag ? "coaccept_slow" : "coaccept");
+		...
+	}
+	if ((size_t)received != sizeof(in)) {
+		warnx("size mismatch: received %zd, expected %zd",
+		    (size_t)received, sizeof(in));
+		...
+	}
+	error = captofd(in.s, &fd);
+	if (error != 0) {
+		warn("captofd: %#lp", in.s);
+		...
+	}
+
+	[..]
+
+	error = close(fd);
+```
+The other side of that interface is in `lib/libbinds/binds.c`.
 
 
 capv
