@@ -46,8 +46,9 @@ process, which can serve as a trivial code example; see `usr.bin/coexec/coexec.c
 
 The other way is the ordinary execve(2) syscall (or posix\_spawn(2), ie any kind of running a binary)
 with `kern.opportunistic_coexecve` sysctl set to 1 - this makes the kernel try to colocate
-processes whenever possible.  By default it tries to colocate them with their parents,
-falling back to the traditional behaviour of allocating new address spaces.
+processes whenever possible.  By default it tries to colocate them with their parents.
+Should this fail, e.g. because the binary is hybrid (colocation is only supported for purecap
+binaries at the moment), it will fall back to the traditional behaviour of allocating a new address space.
 This is useful for enabling communication between independent programs, eg within
 a shell session.
 
@@ -101,7 +102,7 @@ root@cheribsd-riscv64-purecap:~ # procstat -v 837
   838           0x13c000           0x13e000 r--R-    2    0   1   0 CN--- vn /bin/sh
   838           0x13e000           0x141000 rw-RW    3    0   1   0 CN--- vn /bin/sh
   838           0x141000           0x143000 rw-RW    2    2   1   0 C---- sw
-100000           0x143000           0x17d000 -----    0    0   0   0 ----- --
+    -           0x143000           0x17d000 -----    0    0   0   0 ----- --
   842           0x17d000           0x18b000 r--R-   14   32   4   2 CN--- vn /usr/bin/procstat
   842           0x18b000           0x193000 r-xR-    8   32   4   2 CN--- vn /usr/bin/procstat
   842           0x193000           0x196000 r--R-    3    0   1   0 C---- vn /usr/bin/procstat
@@ -119,52 +120,17 @@ where this leads to non-intuitive outcomes - for example, after calling fork(2),
 child ends up in its own address space - which means it's no longer colocated with its
 parent.  In most cases it will become colocated again after it executes a binary.
 
+The "-" entries in the memory map are the abandoned entries; ones that were mapped by a colocated
+process, which then terminated.  Those virtual memory ranges cannot be reused for security
+reasons.
+
 There are several ways of transferring capabilities between processes: they can be sent
 via the buffers provided to cocall(2), or passed to a child via capv(7), transferred
-over unix(4) domain sockets (see `SCM_CAPS`), or published using the obsolete colookup(2)
+over unix(4) domain sockets (`SCM_CAPS`), or published using the obsolete colookup(2)
 system call; some of those methods are described further below.
 For security reasons the kernel will prevent the transfer if sending and receiving
 processes are in different address spaces.
 
-Sending memory capabilities over unix domain socket works similar in concept to
-sending file descriptors using `SCM_RIGHTS`; one important difference is that the
-capabilities can only be received by a process running in the same address space as
-the sending process.
-The sending side looks like this (`usr.bin/coregister/coregister.c`; `target`
-is the `void * __capability` being sent over unix(4) socket indicated by `clientfd`):
-```
-	memset(&msg, 0, sizeof(msg));
-	msg.msg_control = &cmsgbuf.buf;
-	msg.msg_controllen = sizeof(cmsgbuf.buf);
-	msg.msg_iov = NULL;
-	msg.msg_iovlen = 0;
-
-	cmsg = CMSG_FIRSTHDR(&msg);
-	cmsg->cmsg_len = CMSG_LEN(sizeof(target));
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = SCM_CAPS;
-	memcpy(CMSG_DATA(cmsg), &target, sizeof(target));
-
-	sent = sendmsg(clientfd, &msg, MSG_NOSIGNAL);
-	if (sent < 0)
-		warn("sendmsg");
-```
-
-Corrensponding receiving side (`usr.bin/colookup/colookup.c`; `target` is being
-received from `fd`) is:
-```
-	memset(&msg, 0, sizeof(msg));
-	msg.msg_control = &cmsgbuf.buf;
-	msg.msg_controllen = sizeof(cmsgbuf.buf);
-	msg.msg_iov = NULL;
-	msg.msg_iovlen = 0;
-
-	received = recvmsg(fd, &msg, MSG_WAITALL);
-	if (received != 0)
-		err(1, "%s: recvmsg", filename);
-	cmsg = CMSG_FIRSTHDR(&msg);
-	memcpy(&target, CMSG_DATA(cmsg), sizeof(target));
-```
 
 cocall
 ======
@@ -172,7 +138,7 @@ cocall
 This builds upon coexecve, as described above, to provide a fast RPC-like mechanism between colocated
 processes.
 
-Processes are Unix' natural compartments, and lots of existing software makes use of that model.
+Processes are Unix' natural compartments, and a lot of existing software makes use of that model.
 The problem is, they are heavy-weight; communication and context switching overhead make
 using them for fine-grained compartmentalisation impractical.  Cocalls, being fast (order of magnitude
 slower than a function call, order of magnitude faster than a cheapest syscall), aim to fix that problem.
@@ -198,11 +164,12 @@ then cocall(2) sleeps waiting for the service to finish, then the input buffer
 gets overwritten with data from the service, and the length of that data becomes cocall(2)'s
 return value.
 
-The coaccept(2) is the "service side", and it's to be called in a loop.  It also takes two buffers.
-Every call to coaccept(2) copies its output buffer to caller's input buffer; then it sleeps
-until invoked by another cocall(2).  It then returns with input buffer overwritten from caller's
-output buffer.  Note how each invocation of coaccept(2) copies the output to the _previous_
-caller, and later, after sleep, returns with input data from the _next_ caller.
+The coaccept(2) is the "service side", and it's to be called in a loop - each invocation sends data
+back to the caller, and then sleeps waiting for another one.  Like cocall(2) it also takes two buffers.
+Every call to coaccept(2) copies the contents of the output buffer to caller's input buffer; the caller
+is then woken up, while cocaccept(2) sleeps until invoked by another cocall(2).  It then returns
+with input buffer filled with data from caller's output buffer.  Note how each invocation of coaccept(2)
+copies its output to the _last_ caller, and later, after sleep, returns with input data from the _next_ caller.
 
 Here is a code example of two threads using this mechanism to communicate
 (`usr.bin/stevie/stevie.c` in CheriBSD `cocalls` branch):
@@ -320,14 +287,14 @@ Buffers to be used with coaccept(2) and cocall(2) must be capability-aligned, an
 If the services might end up in the capability vector, please follow the conventions in <sys/capv.h>.
 
 This interface is strictly synchronous - which kind of follows from being optimised for low latency.
-It also avoids the common problem of impedance mismatch between the kind of asynchronicity provided
+It also avoids the common problem of impedance mismatch between the flavour of asynchronicity provided
 by APIs and the one optimal for the application.
 If you need async, have the service side queue up the transaction in whatever way you see fit,
 wake up the worker thread, then return.
 
 Thread-wise, this interface is N:1.  When the target is busy - ie not currently waiting in
 coaccept(2) - another cocall(2) to that target will spin until it's free.  When that happens,
-it usually means you should have multiple threads waiting on coaccept(2), and send their target
+it usually means you should have multiple threads waiting on coaccept(2), and distribute their target
 capabilities to callers to cocall them directly.  Targets are cheap.  Different applications
 might benefit from different strategies of spreading the workload, but there probably should
 be a higher-level wrapper API implementing the few typical ones.
@@ -338,19 +305,72 @@ using cogetpid(2).  Being a system call, cogetpid(2) is an order of magnitude sl
 the cocall itself, thus the need for caching.
 Or use cocachedpid(3) instead, which handles it for you.
 
-Both cocall(2) and coaccept(2) calls have their cocall\_slow(2) and coaccept\_slow(2) counterparts.
-Their semantics is (supposed to be) exactly the same; the difference is that the slow ones are
-implemented as ordinary system calls, they don't use the switcher.  If something works with
-cocall\_slow(2), but doesn't with plain cocall(2), it usually means a switcher bug.
+The example above uses threads for simplicity.  It works the same way between different
+processes, except that there needs to be a way to transfer the target capability to
+the prospective caller.  One possible way is via unix(4) domain sockets (`AF_LOCAL`).
+It is similar in concept to sending file descriptors using `SCM_RIGHTS`;
+one important difference is that capabilities can only be received by a process running
+in the same address space as the sending process.
 
-Note that switcher bugs often manifest in ways that make one question their own sanity.  This is normal.
-Most utilities provide the '-k' option to use kernel-based fallbacks instead.
+The sending side looks like this (`usr.bin/coregister/coregister.c`; `target`
+is the `void * __capability` being sent over unix(4) socket indicated by `clientfd`):
+```
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_control = &cmsgbuf.buf;
+	msg.msg_controllen = sizeof(cmsgbuf.buf);
+	msg.msg_iov = NULL;
+	msg.msg_iovlen = 0;
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_len = CMSG_LEN(sizeof(target));
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_CAPS;
+	memcpy(CMSG_DATA(cmsg), &target, sizeof(target));
+
+	sent = sendmsg(clientfd, &msg, MSG_NOSIGNAL);
+	if (sent < 0)
+		warn("sendmsg");
+```
+
+Corresponding receiving side (`usr.bin/colookup/colookup.c`; `target` is being
+received from `fd`) is:
+```
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_control = &cmsgbuf.buf;
+	msg.msg_controllen = sizeof(cmsgbuf.buf);
+	msg.msg_iov = NULL;
+	msg.msg_iovlen = 0;
+
+	received = recvmsg(fd, &msg, MSG_WAITALL);
+	if (received != 0)
+		err(1, "%s: recvmsg", filename);
+	cmsg = CMSG_FIRSTHDR(&msg);
+	memcpy(&target, CMSG_DATA(cmsg), sizeof(target));
+```
 
 Everything in UNIX revolves around file descriptors, and so there is a mechanism to "translate"
 file descriptors into sealed capabilities and vice versa; grep the source for capfromfd(2)
 and captofd(2) system calls.  This can be used to pass a file descriptor to a cocalled service,
-similar how one can pass them over unix domain sockets.   This interface is a very much work
-in progress, but there is example code in `usr.bin/binds/binds.c` and it looks like this:
+similar how one can pass them over unix domain sockets.   This interface works, but is a very much
+work in progress.  Example code for the sending side (`s` is the file descriptor to send,
+`fdcap` is a `void * __capability`) can be found in `lib/libbinds/binds.c`:
+```
+	error = capfromfd(&fdcap, s);
+	if (error != 0)
+		err(1, "capfromfd");
+
+	out.s = fdcap;
+	...
+
+	received = cocall(target, &out, out.len, &in, sizeof(in));
+	if (received < 0) {
+		warn("%s: cocall", __func__);
+		...
+	}
+```
+
+The corresponding receiving side is in `usr.bin/binds/binds.c`:
+
 ```
 	received = coaccept(&cookie, out, out->len, &in, sizeof(in));
 	if (received < 0) {
@@ -372,7 +392,13 @@ in progress, but there is example code in `usr.bin/binds/binds.c` and it looks l
 
 	error = close(fd);
 ```
-The other side of that interface is in `lib/libbinds/binds.c`.
+
+Note that switcher bugs often manifest in ways that make one question their own sanity.  This is normal.
+Both cocall(2) and coaccept(2) calls have their cocall\_slow(2) and coaccept\_slow(2) counterparts.
+Their semantics is (supposed to be) exactly the same; the difference is that the slow ones are
+implemented as ordinary system calls, they don't use the switcher.  If something works with
+cocall\_slow(2), but doesn't with plain cocall(2), it usually means a switcher bug.
+Most utilities provide the '-k' option to use kernel fallbacks.
 
 
 capv
