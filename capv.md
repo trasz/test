@@ -113,18 +113,16 @@ root@cheribsd-riscv64-purecap:~ # procstat -v 837
 Observe the leftmost PID column - it indicates which process owns a memory mapping.
 The kernel won't allow processes to interfere with mappings owned (ie created) by others.
 Without colocation, all the mappings within an address space would belong to the same
-process.
+process.  Those "-" are the abandoned entries - ones that were mapped by a colocated
+process which then terminated; they might also get inherited from parent process' address
+space.  Those virtual memory ranges cannot be reused for security reasons.
 
 Colocation was designed to follow the usual Unix conventions.  There are a few cases
 where this leads to non-intuitive outcomes - for example, after calling fork(2), the
 child ends up in its own address space - which means it's no longer colocated with its
 parent.  In most cases it will become colocated again after it executes a binary.
 
-The "-" entries in the memory map are the abandoned entries; ones that were mapped by a colocated
-process, which then terminated.  Those virtual memory ranges cannot be reused for security
-reasons.
-
-There are several ways of transferring capabilities between processes: they can be sent
+There are several ways to transfer capabilities between processes: they can be sent
 via the buffers provided to cocall(2), or passed to a child via capv(7), transferred
 over unix(4) domain sockets (`SCM_CAPS`), or published using the obsolete colookup(2)
 system call; some of those methods are described further below.
@@ -145,17 +143,17 @@ slower than a function call, order of magnitude faster than a cheapest syscall),
 
 This functionality revolves around two functions: cocall(2) for the caller (client) side,
 and coaccept(2) for the callee (service) side.  Underneath they are implemented using CHERI magic
-in the form of `ccall` CPU instruction to switch protection domains without the need to enter the kernel,
-but from the API user point of view they mostly look like ordinary system calls and follow typical
-system call conventions, `errno` et al.
+in the form of `CInvoke` / `LDPBR` CPU instruction to switch protection domains without the need to enter the kernel,
+but from the API user point of view they mostly look like ordinary system calls and follow the same
+conventions, `errno` et al.
 
-This also applies to security - assume mutual distrust.  On every call, the called side receives
+This also applies to security - the mechanism was built to assume mutual distrust.  On every call, the called side receives
 the information on caller's identity, the contents of their output buffer, and length of that buffer.
-It can return to the caller once.  Upon return the caller receives the contents of the callee's output
+It can return to the caller, once.  Upon return the caller receives the contents of the callee's output
 buffer, its size, and errno for the cocall(2) itself.  The buffer contents are copied; the raw
 capabilities to buffers are not passed to the other side.  The capabilities _within_ buffers are passed
 verbatim though, and can be dereferenced by the other side.  Watch out what you send, or strip
-the 'load capability' permission from the output buffer capability before passing it to coaccept(2)
+the LoadCap permission from the output buffer capability before passing it to coaccept(2)
 or cocall(2).
 
 The cocall(2) function takes a target capability, which identifies the service
@@ -530,6 +528,7 @@ root@cheribsd-riscv64-purecap:~ # coping -ac 1000
 coping: capv[8]: 50.656ms for 1000 iterations, 50.655us each
 coping: capv[10]: 270.122ms for 1000 iterations, 270.122us each
 ```
+
 There's also cocall support in syscall\_timing(1).
 
 
